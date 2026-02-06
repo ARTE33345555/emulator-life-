@@ -1,33 +1,21 @@
 # ============================================
-# Simulation Life 1.0 BETA - MixCode + Mapbox SDK
+# Simulator VR βeta - MyUp Edition
+# Anime + VR Life Simulation Prototype
 # ============================================
 
-import os
-import io
-import json
-import random
-import threading
-import sys
-
-# -----------------------------
-# Panda3D Core
-# -----------------------------
+import os, io, json, math
 from direct.showbase.ShowBase import ShowBase
-from direct.task import Task
-from panda3d.core import (
-    NodePath, Vec3, Texture, PNMImage, loadPrcFileData
-)
+from direct.gui.OnscreenText import OnscreenText
+from panda3d.core import Vec3, Texture, PNMImage
 
 # -----------------------------
-# Networking
+# Mapbox
 # -----------------------------
-from panda3d.core import (
-    QueuedConnectionManager, QueuedConnectionListener,
-    QueuedConnectionReader, ConnectionWriter, NetDatagram
-)
+from mapbox import Static
+from PIL import Image
 
 # -----------------------------
-# VR / OpenXR
+# OpenXR check
 # -----------------------------
 try:
     from panda3d.core import OpenXRInterface
@@ -35,23 +23,16 @@ try:
 except ImportError:
     OPENXR_AVAILABLE = False
 
-# -----------------------------
-# Mapbox SDK
-# -----------------------------
-from mapbox import Static
-from PIL import Image
 
 # -----------------------------
-# Config loader
+# CONFIG
 # -----------------------------
 def load_itconfig(path="itconfig.json"):
     if not os.path.exists(path):
         return {
-            "multiplayer": True,
-            "auto-port": True,
-            "server": True,
-            "mapbox_token": "",  # Вставь свой Mapbox токен
-            "mapbox_style": "mapbox/streets-v12",
+            "demo_mode": True,
+            "vr_strap": "",
+            "mapbox_token": "",
             "start_lat": 37.7749,
             "start_lon": -122.4194,
             "zoom": 16
@@ -59,129 +40,138 @@ def load_itconfig(path="itconfig.json"):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
+
 # -----------------------------
-# Mapbox tile loader
+# MAPBOX TILE
 # -----------------------------
-def get_mapbox_tile(lat, lon, zoom, token, style="mapbox/streets-v12"):
+def get_mapbox_tile(lat, lon, zoom, token):
     service = Static(access_token=token)
-    response = service.image(style, lon=lon, lat=lat, z=zoom, width=512, height=512)
+    response = service.image(
+        "mapbox/streets-v12",
+        lon=lon, lat=lat, z=zoom,
+        width=512, height=512
+    )
     if response.status_code == 200:
-        img = Image.open(io.BytesIO(response.content))
-        return img
-    else:
-        print(f"[Mapbox] Failed to get tile: {response.status_code}")
-        return None
+        return Image.open(io.BytesIO(response.content))
+    return None
 
-# -----------------------------
-# JSON world loader
-# -----------------------------
-def load_code_json(world, path="Code.JSON/world.json"):
-    if not os.path.exists(path):
-        return
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    for obj in data.get("objects", []):
-        node = world.attachNewNode(obj.get("name", "Object"))
-        node.setPos(*obj.get("position", [0, 0, 0]))
 
-# -----------------------------
-# NetServer / NetClient
-# -----------------------------
-class NetServer:
-    def __init__(self, port):
-        self.manager = QueuedConnectionManager()
-        self.listener = QueuedConnectionListener(self.manager, 0)
-        self.reader = QueuedConnectionReader(self.manager, 0)
-        self.writer = ConnectionWriter(self.manager, 0)
+# ============================================
+# MAIN APP
+# ============================================
+class SimulatorVR(ShowBase):
 
-        self.port = port
-        self.connections = []
-
-        self.socket = self.manager.openTCPServerRendezvous(port, 1000)
-        self.listener.addConnection(self.socket)
-        print(f"[NET] Server started on port {port}")
-
-    def update(self):
-        if self.listener.newConnectionAvailable():
-            rendezvous = self.listener.getNewConnection()
-            self.reader.addConnection(rendezvous)
-            self.connections.append(rendezvous)
-            print("[NET] Client connected")
-
-class NetClient:
-    def __init__(self, host, port):
-        self.manager = QueuedConnectionManager()
-        self.reader = QueuedConnectionReader(self.manager, 0)
-        self.writer = ConnectionWriter(self.manager, 0)
-
-        self.connection = self.manager.openTCPClientConnection(host, port, 3000)
-        if self.connection:
-            self.reader.addConnection(self.connection)
-            print("[NET] Connected to server")
-
-# -----------------------------
-# Main Simulation
-# -----------------------------
-class SimulationLife(ShowBase):
     def __init__(self):
         super().__init__()
+
+        print("[MyUp] This simulation was created on this computer.")
+
         self.config = load_itconfig()
         self.world = render.attachNewNode("World")
 
-        # --- Mapbox ---
+        # -------------------------
+        # INTRO TEXT (Anime style)
+        # -------------------------
+        self.intro = OnscreenText(
+            text="Welcome to Virtual Reality Simulation Life",
+            pos=(0, 0.8),
+            scale=0.07
+        )
+
+        self.taskMgr.doMethodLater(3, self.remove_intro, "removeIntro")
+
+        # -------------------------
+        # FULL VR FLAG
+        # -------------------------
+        self.full_vr_enabled = self.config.get("vr_strap") == "100%"
+
+        if self.full_vr_enabled and OPENXR_AVAILABLE:
+            xr = OpenXRInterface()
+            base.openXR.setInterface(xr)
+            print("[VR] Full immersion enabled")
+        else:
+            print("[SYSTEM] Demo / Desktop mode")
+
+        # -------------------------
+        # MAPBOX
+        # -------------------------
         token = self.config.get("mapbox_token")
         if token:
             tile = get_mapbox_tile(
-                self.config.get("start_lat"),
-                self.config.get("start_lon"),
-                self.config.get("zoom"),
-                token,
-                self.config.get("mapbox_style")
+                self.config["start_lat"],
+                self.config["start_lon"],
+                self.config["zoom"],
+                token
             )
+
             if tile:
-                # Конвертируем PIL Image в PNMImage для Panda3D
                 pnm = PNMImage(tile.width, tile.height)
-                tile_rgb = tile.convert("RGB")
+                rgb = tile.convert("RGB")
+
                 for x in range(tile.width):
                     for y in range(tile.height):
-                        r, g, b = tile_rgb.getpixel((x, y))
+                        r, g, b = rgb.getpixel((x, tile.height-y-1))
                         pnm.setXel(x, y, r/255, g/255, b/255)
+
                 tex = Texture()
                 tex.load(pnm)
-                np = self.world.attachNewNode("MapTile")
-                np.setTexture(tex)
-                print("[Mapbox] Tile loaded")
-        else:
-            print("[Mapbox] No token provided")
 
-        # --- Load JSON objects ---
-        load_code_json(self.world)
+                plane = self.world.attachNewNode("Map")
+                plane.setTexture(tex)
 
-        # --- Multiplayer ---
-        self.server = None
-        self.client = None
-        port = random.randint(20000, 40000)
-        if self.config.get("multiplayer"):
-            if self.config.get("server"):
-                self.server = NetServer(port)
-            self.client = NetClient("localhost", port)
+                print("[Mapbox] Map loaded")
 
+        # -------------------------
+        # AVATAR
+        # -------------------------
+        self.avatar = self.world.attachNewNode("Avatar")
+        self.avatar.setPos(0, 0, 0)
+
+        # Aura (anime feeling)
+        aura = loader.loadModel("models/smiley")
+        aura.setScale(0.5)
+        aura.setColor(0.3, 0.6, 1, 0.3)
+        aura.reparentTo(self.avatar)
+
+        # -------------------------
+        # CAMERA
+        # -------------------------
+        self.camera.setPos(0, -40, 20)
+        self.camera.lookAt(self.avatar)
+
+        # -------------------------
+        # MOVEMENT (Demo)
+        # -------------------------
+        self.accept("w", self.move, [0, 1])
+        self.accept("s", self.move, [0, -1])
+        self.accept("a", self.move, [-1, 0])
+        self.accept("d", self.move, [1, 0])
+
+        # -------------------------
+        # UPDATE LOOP
+        # -------------------------
         self.taskMgr.add(self.update, "update")
 
-        # --- Camera ---
-        self.camera.setPos(0, -40, 20)
-        self.camera.lookAt(0, 0, 0)
+    # -------------------------
+    def remove_intro(self, task):
+        self.intro.destroy()
+        return task.done
 
-        print("[SYSTEM] Simulation Life started")
+    # -------------------------
+    def move(self, dx, dy):
+        self.avatar.setPos(self.avatar, Vec3(dx, dy, 0))
 
+    # -------------------------
     def update(self, task):
-        if self.server:
-            self.server.update()
+        # Slight anime camera motion
+        t = task.time
+        self.camera.setZ(20 + math.sin(t) * 0.2)
+        self.camera.lookAt(self.avatar)
         return task.cont
 
-# -----------------------------
-# Run
-# -----------------------------
+
+# ============================================
 if __name__ == "__main__":
-    app = SimulationLife()
+    app = SimulatorVR()
     app.run()
+
