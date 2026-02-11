@@ -3,14 +3,11 @@
 # Anime + VR Life Simulation Prototype
 # ============================================
 
-import os, io, json, math
+import os, io, json, math, random
 from direct.showbase.ShowBase import ShowBase
 from direct.gui.OnscreenText import OnscreenText
-from panda3d.core import Vec3, Texture, PNMImage
-
-# -----------------------------
-# Mapbox
-# -----------------------------
+from direct.gui.DirectGui import DirectFrame, DirectButton, DirectLabel
+from panda3d.core import Vec3, Texture, PNMImage, AudioSound
 from mapbox import Static
 from PIL import Image
 
@@ -22,7 +19,6 @@ try:
     OPENXR_AVAILABLE = True
 except ImportError:
     OPENXR_AVAILABLE = False
-
 
 # -----------------------------
 # CONFIG
@@ -40,7 +36,6 @@ def load_itconfig(path="itconfig.json"):
     with open(path, "r", encoding="utf-8") as f:
         return json.load(f)
 
-
 # -----------------------------
 # MAPBOX TILE
 # -----------------------------
@@ -55,19 +50,74 @@ def get_mapbox_tile(lat, lon, zoom, token):
         return Image.open(io.BytesIO(response.content))
     return None
 
+# ============================================
+# LOADING SCREEN + SOUND
+# ============================================
+class LoadingScreen:
+    def __init__(self, base):
+        self.base = base
+        self.frame = DirectFrame(frameColor=(0,0,0,1), frameSize=(-1,1,-1,1))
+        self.label = DirectLabel(text="Loading VR World...", scale=0.1, pos=(0,0,0))
+
+        # Рандомный звук загрузки
+        sounds = ["sounds/load1.ogg", "sounds/load2.ogg", "sounds/load3.ogg"]
+        sound_path = random.choice(sounds)
+        self.sound = base.loader.loadSfx(sound_path)
+        self.sound.play()
+
+        # Имитация загрузки (3 секунды)
+        base.taskMgr.doMethodLater(3, self.finish_loading, "finishLoading")
+
+    def finish_loading(self, task):
+        self.frame.destroy()
+        # Звук приветствия для новых пользователей
+        welcome_sound = self.base.loader.loadSfx("sounds/welcome.ogg")
+        welcome_sound.play()
+        # Запуск главного меню
+        MainMenu(self.base)
+        return task.done
 
 # ============================================
-# MAIN APP
+# MAIN MENU (SAO style)
+# ============================================
+class MainMenu:
+    def __init__(self, base):
+        self.base = base
+        self.frame = DirectFrame(frameColor=(0,0,0,1), frameSize=(-1,1,-1,1))
+
+        # Заголовок
+        self.title = DirectLabel(text="☆ SAO VR Simulator ☆", scale=0.12, pos=(0,0,0.8), text_fg=(1,0.7,0.2,1))
+
+        # Кнопки
+        self.start_btn = DirectButton(text="Start VR", scale=0.08, pos=(0,0,0.4), command=self.start_vr)
+        self.options_btn = DirectButton(text="Options", scale=0.08, pos=(0,0,0.2), command=self.show_options)
+        self.exit_btn = DirectButton(text="Exit", scale=0.08, pos=(0,0,0), command=base.userExit)
+
+    def start_vr(self):
+        self.frame.destroy()
+        self.base.start_simulation()  # Запускаем VR-сцену
+
+    def show_options(self):
+        print("[Menu] Options opened")
+
+# ============================================
+# MAIN VR SIMULATOR
 # ============================================
 class SimulatorVR(ShowBase):
 
     def __init__(self):
         super().__init__()
 
-        print("[MyUp] This simulation was created on this computer.")
-
+        self.simulation_running = False
         self.config = load_itconfig()
         self.world = render.attachNewNode("World")
+
+    # -------------------------
+    # Запуск VR после меню
+    # -------------------------
+    def start_simulation(self):
+        self.simulation_running = True
+        print("[MyUp] VR Simulation started.")
 
         # -------------------------
         # INTRO TEXT (Anime style)
@@ -77,7 +127,6 @@ class SimulatorVR(ShowBase):
             pos=(0, 0.8),
             scale=0.07
         )
-
         self.taskMgr.doMethodLater(3, self.remove_intro, "removeIntro")
 
         # -------------------------
@@ -107,7 +156,6 @@ class SimulatorVR(ShowBase):
             if tile:
                 pnm = PNMImage(tile.width, tile.height)
                 rgb = tile.convert("RGB")
-
                 for x in range(tile.width):
                     for y in range(tile.height):
                         r, g, b = rgb.getpixel((x, tile.height-y-1))
@@ -115,10 +163,8 @@ class SimulatorVR(ShowBase):
 
                 tex = Texture()
                 tex.load(pnm)
-
                 plane = self.world.attachNewNode("Map")
                 plane.setTexture(tex)
-
                 print("[Mapbox] Map loaded")
 
         # -------------------------
@@ -157,11 +203,9 @@ class SimulatorVR(ShowBase):
         self.intro.destroy()
         return task.done
 
-    # -------------------------
     def move(self, dx, dy):
         self.avatar.setPos(self.avatar, Vec3(dx, dy, 0))
 
-    # -------------------------
     def update(self, task):
         # Slight anime camera motion
         t = task.time
@@ -169,9 +213,10 @@ class SimulatorVR(ShowBase):
         self.camera.lookAt(self.avatar)
         return task.cont
 
-
+# ============================================
+# RUN APP
 # ============================================
 if __name__ == "__main__":
     app = SimulatorVR()
+    LoadingScreen(app)  # запускаем загрузку с рандомным звуком и SAO-меню
     app.run()
-
